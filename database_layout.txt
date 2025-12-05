@@ -1,0 +1,22 @@
+#Database files layout, every subnet is its own CSV files
+
+# Name of file will be the subnet name minus .csv of course
+# First line will setup subnet in CIDR format
+
+#####################################################################################################################################
+|Unique part of IP address (ex .7) | Type (Active|Reserved|Offline|Not Used|Rogue) | Description
+#####################################################################################################################################
+
+
+
+
+
+
+
+
+# Explanation of Type:
+    * Active means put in IPAM and pingable
+    * Reserved means might be active but always Reserved
+    * Offline means in IPAM and not pingable
+    * Not used means not in IPAM and not pingable
+    * Rogue means not in IPAM and pingable
