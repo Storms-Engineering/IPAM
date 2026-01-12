@@ -4,7 +4,7 @@
 # First line will setup subnet in CIDR format
 
 #####################################################################################################################################
-|Unique part of IP address (ex .7) | Type (Active|Reserved|Offline|Not Used|Rogue) | Description
+|Unique part of IP address (ex .7 or if in a larger subnet 10.6) | Type (Active|Reserved|Offline|Unused|Rogue|Gateway|DHCP) | Description
 #####################################################################################################################################
 
 
@@ -18,5 +18,7 @@
     * Active means put in IPAM and pingable
     * Reserved means might be active but always Reserved
     * Offline means in IPAM and not pingable
-    * Not used means not in IPAM and not pingable
+    * Unused means not in IPAM and not pingable
     * Rogue means not in IPAM and pingable
+    * Gateway is a special address only for the Gateway
+    * Reserved as a DHCP Address - can be a range of contigous addresses

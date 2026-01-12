@@ -1,159 +1,120 @@
 package main
 
-import (
-	"context"
-	"errors"
-	"net"
-	"os"
-	"os/signal"
-	"runtime"
-	"syscall"
-	"time"
+// An example demonstrating an application with multiple views.
+//
+// Note that this example was produced before the Bubbles progress component
+// was available (github.com/charmbracelet/bubbles/progress) and thus, we're
+// implementing a progress bar from scratch here.
 
+import (
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/log"
-	"github.com/charmbracelet/ssh"
-	"github.com/charmbracelet/wish"
-	"github.com/charmbracelet/wish/activeterm"
-	"github.com/charmbracelet/wish/bubbletea"
-	"github.com/charmbracelet/wish/logging"
-	"github.com/charmbracelet/x/editor"
 )
 
 const (
-	host = "localhost"
-	port = "7"
+	dotChar = " • "
 )
 
-func main() {
-	s, err := wish.NewServer(
-		wish.WithAddress(net.JoinHostPort(host, port)),
+const (
+	ip_addr = iota
+	ip_desc
+	ip_type
+)
 
-		// Allocate a pty.
-		// This creates a pseudoconsole on windows, compatibility is limited in
-		// that case, see the open issues for more details.
-		ssh.AllocatePty(),
-		wish.WithMiddleware(
-			// run our Bubble Tea handler
-			bubbletea.Middleware(teaHandler),
-
-			// ensure the user has requested a tty
-			activeterm.Middleware(),
-			logging.Middleware(),
-		),
-	)
-	if err != nil {
-		log.Error("Could not start server", "error", err)
-	}
-
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	log.Info("Starting SSH server", "host", host, "port", port)
-	go func() {
-		if err = s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
-			log.Error("Could not start server", "error", err)
-			done <- nil
-		}
-	}()
-
-	<-done
-	log.Info("Stopping SSH server")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer func() { cancel() }()
-	if err := s.Shutdown(ctx); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
-		log.Error("Could not stop server", "error", err)
-	}
-}
-
-type model struct {
-	err      error
-	sess     ssh.Session
-	style    lipgloss.Style
-	errStyle lipgloss.Style
-	table    table.Model
-}
-
-func (m model) Init() tea.Cmd {
-	return nil
-}
-
-type cmdFinishedMsg struct{ err error }
-
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "e":
-			// Open file.txt in the default editor.
-			edit, err := editor.Cmd("wish", "file.txt")
-			if err != nil {
-				m.err = err
-				return m, nil
-			}
-			// Creates a wish.Cmd from the exec.Cmd
-			wishCmd := wish.Command(m.sess, edit.Path, edit.Args...)
-			// Runs the cmd through Bubble Tea.
-			// Bubble Tea should handle the IO to the program, and get it back
-			// once the program quits.
-			cmd := tea.Exec(wishCmd, func(err error) tea.Msg {
-				if err != nil {
-					log.Error("editor finished", "error", err)
-				}
-				return cmdFinishedMsg{err: err}
-			})
-			return m, cmd
-		case "s":
-			// We can also execute a shell and give it over to the user.
-			// Note that this session won't have control, so it can't run tasks
-			// in background, suspend, etc.
-			c := wish.Command(m.sess, "bash", "-im")
-			if runtime.GOOS == "windows" {
-				c = wish.Command(m.sess, "powershell")
-			}
-			cmd := tea.Exec(c, func(err error) tea.Msg {
-				if err != nil {
-					log.Error("shell finished", "error", err)
-				}
-				return cmdFinishedMsg{err: err}
-			})
-			return m, cmd
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		//This needs togo in a different context with a flag designating whether we are in a table or not
-		case "enter":
-			return m, tea.Batch(
-				tea.Printf("Let's go to %s!", m.table.SelectedRow()[1]),
-			)
-		case "esc":
-			if m.table.Focused() {
-				m.table.Blur()
-			} else {
-				m.table.Focus()
-			}
-		}
-	case cmdFinishedMsg:
-		m.err = msg.err
-		return m, cmd
-	}
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
-}
-
-var baseStyle = lipgloss.NewStyle().
+var tableStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.NormalBorder()).
 	BorderForeground(lipgloss.Color("240"))
 
-func (m model) View() string {
-	if m.err != nil {
-		return m.errStyle.Render(m.err.Error() + "\n")
+// General stuff for styling the view
+var (
+	keywordStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#005ce6"))
+	subtleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	checkboxStyle = lipgloss.NewStyle().Foreground(green).Align(lipgloss.Left)
+	dotStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(dotChar)
+	mainStyle     = lipgloss.NewStyle()
+)
+
+const (
+	green    = lipgloss.Color("#009900")
+	darkGray = lipgloss.Color("#767676")
+)
+
+// Global Variables
+var (
+	inputStyle    = lipgloss.NewStyle().Foreground(green).Background(lipgloss.Color("#a09595ff")).Align(lipgloss.Left)
+	continueStyle = lipgloss.NewStyle().Foreground(darkGray)
+)
+
+type (
+	errMsg error
+)
+
+// List types
+type item string
+type itemDelegate struct{}
+
+var (
+	titleStyle        = lipgloss.NewStyle().MarginLeft(2).Border(lipgloss.ASCIIBorder(), true).Background(lipgloss.Color(green))
+	itemStyle         = lipgloss.NewStyle().PaddingLeft(4)
+	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
+	paginationStyle   = list.DefaultStyles().PaginationStyle.PaddingLeft(4)
+	helpStyle         = list.DefaultStyles().HelpStyle.PaddingLeft(4).PaddingBottom(1)
+)
+
+func (i item) FilterValue() string { return "" }
+
+const listHeight = 14
+
+func (d itemDelegate) Height() int                             { return 1 }
+func (d itemDelegate) Spacing() int                            { return 0 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(item)
+	if !ok {
+		return
 	}
-	return baseStyle.Render(m.table.View()) + "\n"
+
+	str := fmt.Sprintf("%d. %s", index+1, i)
+
+	fn := itemStyle.Render
+	if index == m.Index() {
+		fn = func(s ...string) string {
+			return selectedItemStyle.Render("> " + strings.Join(s, " "))
+		}
+	}
+
+	fmt.Fprint(w, fn(str))
 }
 
-func teaHandler(ss ssh.Session) (tea.Model, []tea.ProgramOption) {
+func main() {
+
+	//Ip type list
+	items := []list.Item{
+		item("Normal"),
+		item("Reserverd"),
+		item("DHCP Range"),
+		item("Gateway"),
+	}
+
+	const defaultWidth = 100
+
+	l := list.New(items, itemDelegate{}, defaultWidth, listHeight)
+	l.Title = "Type:"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(false)
+	l.Styles.Title = titleStyle
+	l.Styles.PaginationStyle = paginationStyle
+	l.Styles.HelpStyle = helpStyle
+
+	//Table Init
 	columns := []table.Column{
 		{Title: "Rank", Width: 4},
 		{Title: "City", Width: 10},
@@ -283,22 +244,316 @@ func teaHandler(ss ssh.Session) (tea.Model, []tea.ProgramOption) {
 		Bold(false)
 	t.SetStyles(s)
 
-	/*m := model{t}
-	if _, err := tea.NewProgram(m).Run(); err != nil {
-		fmt.Println("Error running program:", err)
-		os.Exit(1)
-	}*/
+	//Input init
+	var inputs []textinput.Model = make([]textinput.Model, 3)
+	inputs[ip_addr] = textinput.New()
+	inputs[ip_addr].Placeholder = "IP"
+	inputs[ip_addr].Focus()
+	inputs[ip_addr].CharLimit = 20
+	inputs[ip_addr].Width = 30
+	inputs[ip_addr].Prompt = "10.25.66." //Make this dynamic for which subnet we are in
+	//TODO add these later inputs[ccn].Validate = ccnValidator
 
-	// Create a lipgloss.Renderer for the session
-	renderer := bubbletea.MakeRenderer(ss)
-	// Set up the model with the current session and styles.
-	// We'll use the session to call wish.Command, which makes it compatible
-	// with tea.Command.
-	m := model{
-		sess:     ss,
-		style:    renderer.NewStyle().Foreground(lipgloss.Color("8")),
-		errStyle: renderer.NewStyle().Foreground(lipgloss.Color("3")),
-		table:    t,
+	inputs[ip_desc] = textinput.New()
+	inputs[ip_desc].Placeholder = "FS Switch "
+	inputs[ip_desc].CharLimit = 50
+	inputs[ip_desc].Width = 50
+	inputs[ip_desc].Prompt = ""
+	//inputs[exp].Validate = expValidator
+
+	//Possibly do this with suggestions instead of a list picker?
+	inputs[ip_type] = textinput.New()
+	inputs[ip_type].Placeholder = "XXX"
+	inputs[ip_type].CharLimit = 10
+	inputs[ip_type].Width = 10
+	inputs[ip_type].Prompt = ""
+
+	//inputs[cvv].Validate = cvvValidator
+	//Init Model 		Choice,MainMenu, State, Loaded, Quitting, table,Selected,inputs,focused, list, ChoiceSubnetModel, err,
+	initialModel := model{0, true, MainMenu, false, false, t, false, inputs, 0, l, "Normal", nil}
+	p := tea.NewProgram(initialModel, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Println("could not start program:", err)
 	}
-	return m, []tea.ProgramOption{tea.WithAltScreen()}
+}
+
+type ContextState int
+
+// The possible values for ServerState are defined as constants. The special keyword iota generates successive constant values automatically; in this case 0, 1, 2 and so on.
+// Source: https://gobyexample.com/enums
+const (
+	MainMenu ContextState = iota
+	Search
+	SubnetTable
+	EditValue
+	PickSubnetType
+)
+
+type model struct {
+	Choice           int
+	MainMenu         bool
+	State            ContextState
+	Loaded           bool
+	Quitting         bool
+	table            table.Model
+	Selected         bool
+	inputs           []textinput.Model
+	focused          int
+	list             list.Model
+	ChoiceSubnetType string
+	err              error
+}
+
+func (m model) Init() tea.Cmd {
+	//We can only do this here which is annoying :(
+	m.inputs[ip_type].SetValue(m.ChoiceSubnetType)
+	return nil
+}
+
+// Main update function.
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Make sure these keys always quit
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		k := msg.String()
+		if k == "q" || k == "ctrl+c" {
+			m.Quitting = true
+			return m, tea.Quit
+		}
+		if k == "esc" {
+			//Go back one Menu -- Theoretically
+			m.State--
+			if m.State <= 0 {
+				m.State = MainMenu
+				m.MainMenu = true
+			}
+		}
+	}
+	// Hand off the message and model to the appropriate update function for the
+	// appropriate view based on the current state.
+	if m.MainMenu {
+		return updateChoices(msg, m)
+	}
+	return updateChosen(msg, m)
+}
+
+// The main view, which just calls the appropriate sub-view
+func (m model) View() string {
+	var s string
+	if m.Quitting {
+		return mainStyle.Render("\n  Follow the white rabbit\n\n")
+	}
+	if m.MainMenu {
+		s = choicesView(m)
+	} else {
+		s = chosenView(m)
+	}
+	return mainStyle.Render("\n" + s + "\n\n")
+}
+
+// Sub-update functions
+
+// Update loop for the first view where you're choosing a task.
+func updateChoices(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "j", "down":
+			m.Choice++
+			if m.Choice > 3 {
+				m.Choice = 3
+			}
+		case "k", "up":
+			m.Choice--
+			if m.Choice < 0 {
+				m.Choice = 0
+			}
+		case "enter":
+			m.MainMenu = false
+			m.State = ContextState(m.Choice + 1)
+			return m, nil
+		}
+
+	}
+
+	return m, nil
+}
+
+// Update loop for the second view after a choice has been made
+func updateChosen(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		//SubnetTable View
+		if m.Choice == 1 && m.State == SubnetTable {
+			m.table, cmd = m.table.Update(msg)
+			switch msg.String() {
+			case "p":
+				if m.table.Focused() {
+					m.table.Blur()
+				} else {
+					m.table.Focus()
+				}
+			case "enter":
+				m.State = EditValue
+				m.Selected = true
+				return m, nil
+			}
+		}
+		//If we were in SubnetTable View and now editing a value
+		if m.Choice == 1 && m.State == EditValue {
+			return updateInputs(msg, m)
+		}
+		//Only updating the list view
+		if m.Choice == 1 && m.State == PickSubnetType {
+			m.list, cmd = m.list.Update(msg)
+			if msg.String() == "enter" {
+				i, ok := m.list.SelectedItem().(item)
+				if ok {
+					m.ChoiceSubnetType = string(i)
+				} else {
+					m.err = errors.New("Selected list failed fantastically!")
+					return m, tea.Quit
+				}
+			}
+
+		}
+	}
+	//Catch all return
+	return m, cmd
+}
+
+func updateInputs(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd = make([]tea.Cmd, len(m.inputs))
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyEnter:
+			if m.focused == len(m.inputs)-1 {
+				if m.State == EditValue {
+					m.State = PickSubnetType
+				} else {
+					m.State = EditValue
+				}
+			}
+			m.nextInput()
+		case tea.KeyCtrlC, tea.KeyEsc:
+			return m, tea.Quit
+		case tea.KeyShiftTab, tea.KeyCtrlP:
+			m.prevInput()
+		case tea.KeyTab, tea.KeyCtrlN:
+			m.nextInput()
+		}
+		for i := range m.inputs {
+			m.inputs[i].Blur()
+		}
+		m.inputs[m.focused].Focus()
+
+	// We handle errors just like any other message
+	case errMsg:
+		m.err = msg
+		return m, nil
+	}
+
+	for i := range m.inputs {
+		m.inputs[i], cmds[i] = m.inputs[i].Update(msg)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// nextInput focuses the next input field
+func (m *model) nextInput() {
+	m.focused = (m.focused + 1) % len(m.inputs)
+}
+
+// prevInput focuses the previous input field
+func (m *model) prevInput() {
+	m.focused--
+	// Wrap around
+	if m.focused < 0 {
+		m.focused = len(m.inputs) - 1
+	}
+}
+
+// Sub-views
+
+// The first view, where you're choosing a task
+func choicesView(m model) string {
+	c := m.Choice
+
+	tpl := titleStyle.Render("What to do today?") + "\n\n"
+	tpl += "%s\n\n"
+	tpl += subtleStyle.Render("j/k, up/down: select") + dotStyle +
+		subtleStyle.Render("enter: choose") + dotStyle +
+		subtleStyle.Render("q: quit") + dotStyle +
+		subtleStyle.Render("esc: go back")
+
+	choices := fmt.Sprintf(
+		"%s\n%s\n%s\n%s",
+		checkbox("Search", c == 0),
+		checkbox("View Table (Subnets future)", c == 1),
+		checkbox("Read something", c == 2),
+		checkbox("See friends", c == 3),
+	)
+
+	return fmt.Sprintf(tpl, choices)
+}
+
+// The second view, after a task has been chosen
+// We cannot change states in view
+func chosenView(m model) string {
+	var msg string
+
+	switch m.Choice {
+	case 0:
+		msg = fmt.Sprintf("Carrot planting?\n\nCool, we'll need %s and %s...", keywordStyle.Render("libgarden"), keywordStyle.Render("vegeutils"))
+	//SubnetTable View
+	case 1:
+		if m.State == SubnetTable {
+			msg += tableStyle.Render(m.table.View())
+			if m.Selected == true {
+				msg += fmt.Sprintf("\n\nLets go to %s", m.table.SelectedRow()[1])
+			} else {
+				msg += "Not Selected"
+			}
+			return msg
+		}
+		if m.State == EditValue {
+			msg += mainStyle.Render("DEBUG")
+			ipText := "Ip Address:"
+			descText := "Description:"
+			typeText := "Type:"
+			//Input fields
+			msg += fmt.Sprintf(`Edit IP Address
+%s%s
+%s%s
+%s%s
+%s`,
+				inputStyle.Width(len(ipText)).Render(ipText),
+				m.inputs[ip_addr].View(),
+				inputStyle.Width(len(descText)).Render(descText),
+				m.inputs[ip_desc].View(),
+				inputStyle.Width(len(typeText)).Render(typeText),
+				m.inputs[ip_type].View(),
+				continueStyle.Render("Continue ->"),
+			) + "\n"
+		}
+		if m.State == PickSubnetType {
+			msg += "\n" + m.list.View()
+		}
+
+	case 2:
+		msg = fmt.Sprintf("Reading time?\n\nOkay, cool, then we’ll need a library. Yes, an %s.", keywordStyle.Render("actual library"))
+	default:
+		msg = fmt.Sprintf("It’s always good to see friends.\n\nFetching %s and %s...", keywordStyle.Render("social-skills"), keywordStyle.Render("conversationutils"))
+	}
+	tea.LogToFile("log.txt", msg)
+	return msg + "\nEOL"
+}
+
+func checkbox(label string, checked bool) string {
+	if checked {
+		return checkboxStyle.Render("[x] " + label)
+	}
+	return fmt.Sprintf("[ ] %s", label)
 }
