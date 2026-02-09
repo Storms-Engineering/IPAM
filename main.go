@@ -410,6 +410,8 @@ func updateChosen(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
 					m.ChoiceSubnetType = string(i)
+					m.State = EditValue
+					return m, nil
 				} else {
 					m.err = errors.New("Selected list failed fantastically!")
 					return m, tea.Quit
@@ -519,7 +521,6 @@ func chosenView(m model) string {
 			return msg
 		}
 		if m.State == EditValue {
-			msg += mainStyle.Render("DEBUG")
 			ipText := "Ip Address:"
 			descText := "Description:"
 			typeText := "Type:"
@@ -547,8 +548,7 @@ func chosenView(m model) string {
 	default:
 		msg = fmt.Sprintf("It’s always good to see friends.\n\nFetching %s and %s...", keywordStyle.Render("social-skills"), keywordStyle.Render("conversationutils"))
 	}
-	tea.LogToFile("log.txt", msg)
-	return msg + "\nEOL"
+	return msg
 }
 
 func checkbox(label string, checked bool) string {
