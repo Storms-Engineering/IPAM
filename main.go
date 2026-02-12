@@ -99,7 +99,7 @@ func main() {
 	//Ip type list
 	items := []list.Item{
 		item("Normal"),
-		item("Reserverd"),
+		item("Reserved"),
 		item("DHCP Range"),
 		item("Gateway"),
 	}
@@ -263,7 +263,6 @@ func main() {
 
 	//Possibly do this with suggestions instead of a list picker?
 	inputs[ip_type] = textinput.New()
-	inputs[ip_type].Placeholder = "XXX"
 	inputs[ip_type].CharLimit = 10
 	inputs[ip_type].Width = 10
 	inputs[ip_type].Prompt = ""
@@ -331,9 +330,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Hand off the message and model to the appropriate update function for the
 	// appropriate view based on the current state.
 	if m.MainMenu {
-		return updateChoices(msg, m)
+		return updateMainMenu(msg, m)
 	}
-	return updateChosen(msg, m)
+	return updateTasks(msg, m)
 }
 
 // The main view, which just calls the appropriate sub-view
@@ -343,17 +342,17 @@ func (m model) View() string {
 		return mainStyle.Render("\n  Follow the white rabbit\n\n")
 	}
 	if m.MainMenu {
-		s = choicesView(m)
+		s = mainMenuView(m)
 	} else {
-		s = chosenView(m)
+		s = taskView(m)
 	}
 	return mainStyle.Render("\n" + s + "\n\n")
 }
 
 // Sub-update functions
 
-// Update loop for the first view where you're choosing a task.
-func updateChoices(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+// Update loop for the main menu
+func updateMainMenu(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -379,7 +378,7 @@ func updateChoices(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 }
 
 // Update loop for the second view after a choice has been made
-func updateChosen(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+func updateTasks(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -403,7 +402,7 @@ func updateChosen(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 		if m.Choice == 1 && m.State == EditValue {
 			return updateInputs(msg, m)
 		}
-		//Only updating the list view
+		//Subnet Type List View
 		if m.Choice == 1 && m.State == PickSubnetType {
 			m.list, cmd = m.list.Update(msg)
 			if msg.String() == "enter" {
@@ -466,6 +465,7 @@ func updateInputs(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 // nextInput focuses the next input field
 func (m *model) nextInput() {
 	m.focused = (m.focused + 1) % len(m.inputs)
+	//TODO add a special case before we loop around once we reach the end to change the style of the continue "button"
 }
 
 // prevInput focuses the previous input field
@@ -479,8 +479,7 @@ func (m *model) prevInput() {
 
 // Sub-views
 
-// The first view, where you're choosing a task
-func choicesView(m model) string {
+func mainMenuView(m model) string {
 	c := m.Choice
 
 	tpl := titleStyle.Render("What to do today?") + "\n\n"
@@ -501,9 +500,7 @@ func choicesView(m model) string {
 	return fmt.Sprintf(tpl, choices)
 }
 
-// The second view, after a task has been chosen
-// We cannot change states in view
-func chosenView(m model) string {
+func taskView(m model) string {
 	var msg string
 
 	switch m.Choice {
@@ -524,6 +521,7 @@ func chosenView(m model) string {
 			ipText := "Ip Address:"
 			descText := "Description:"
 			typeText := "Type:"
+			m.inputs[ip_type].SetValue(m.ChoiceSubnetType)
 			//Input fields
 			msg += fmt.Sprintf(`Edit IP Address
 %s%s
