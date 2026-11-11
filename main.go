@@ -426,6 +426,12 @@ func updateTasks(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 func updateInputs(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd = make([]tea.Cmd, len(m.inputs))
 
+	if tea.KeyMsg.String(tea.KeyMsg) == "e" {
+		if m.focused == len(m.inputs)-1 {
+			m.State = PickSubnetType
+		}
+	m.nextInputEditIP()
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -434,22 +440,22 @@ func updateInputs(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 				if m.State == EditValue {
 					m.State = PickSubnetType
 				} else {
-					m.State = EditValue
+					m.err = errors.New("Wrong focus on input apparently inside of pick ip type")
+					return m, tea.Quit
 				}
 			}
-			m.nextInput()
+			m.nextInputEditIP()
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
 		case tea.KeyShiftTab, tea.KeyCtrlP:
 			m.prevInput()
 		case tea.KeyTab, tea.KeyCtrlN:
-			m.nextInput()
+			m.nextInputEditIP()
 		}
 		for i := range m.inputs {
 			m.inputs[i].Blur()
 		}
 		m.inputs[m.focused].Focus()
-
 	// We handle errors just like any other message
 	case errMsg:
 		m.err = msg
@@ -463,7 +469,7 @@ func updateInputs(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 }
 
 // nextInput focuses the next input field
-func (m *model) nextInput() {
+func (m *model) nextInputEditIP() {
 	m.focused = (m.focused + 1) % len(m.inputs)
 	//TODO add a special case before we loop around once we reach the end to change the style of the continue "button"
 }
@@ -482,7 +488,7 @@ func (m *model) prevInput() {
 func mainMenuView(m model) string {
 	c := m.Choice
 
-	tpl := titleStyle.Render("What to do today?") + "\n\n"
+	tpl := titleStyle.Render("Welcome to TIPAM, please select a choice below:") + "\n\n"
 	tpl += "%s\n\n"
 	tpl += subtleStyle.Render("j/k, up/down: select") + dotStyle +
 		subtleStyle.Render("enter: choose") + dotStyle +
@@ -536,6 +542,15 @@ func taskView(m model) string {
 				m.inputs[ip_type].View(),
 				continueStyle.Render("Continue ->"),
 			) + "\n"
+
+			msg += "%s\n\n"
+			msg += subtleStyle.Render("j/k, up/down: select") + dotStyle +
+			subtleStyle.Render("enter: Save ") + dotStyle +
+			subtleStyle.Render("e: Edit Choice ") + dotStyle +
+			subtleStyle.Render("q: quit") + dotStyle +
+			subtleStyle.Render("esc: go back")
+
+
 		}
 		if m.State == PickSubnetType {
 			msg += "\n" + m.list.View()
